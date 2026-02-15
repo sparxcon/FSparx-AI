@@ -23,6 +23,7 @@ except ImportError:
 ALLOWED_CHANNEL_ID = 1472309916864876596
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.3-70b-versatile"
+
 RATE_LIMIT_REQUESTS = 10
 RATE_LIMIT_WINDOW = 3600  # 1 hour in seconds
 MOD_ROLE_NAME = "MOD"
@@ -33,9 +34,9 @@ SUPPORTED_FORMATS = {".png", ".jpg", ".jpeg", ".webp"}
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-logger = logging.getLogger('discord_bot')
+logger = logging.getLogger("discord_bot")
 
 # Rate limiting storage
 user_requests = defaultdict(list)
@@ -59,8 +60,7 @@ def check_rate_limit(user_id: int, has_mod_role: bool) -> tuple[bool, int]:
 
     # Clean old requests
     user_requests[user_id] = [
-        req_time for req_time in user_requests[user_id]
-        if req_time > cutoff
+        req_time for req_time in user_requests[user_id] if req_time > cutoff
     ]
 
     current_count = len(user_requests[user_id])
@@ -80,6 +80,7 @@ def has_mod_role(interaction: discord.Interaction) -> bool:
     member = interaction.user
     if isinstance(member, discord.Member):
         return any(role.name.upper() == MOD_ROLE_NAME.upper() for role in member.roles)
+
     return False
 
 
@@ -99,8 +100,8 @@ def extract_text_from_image(image_bytes: bytes) -> str:
         image = Image.open(io.BytesIO(image_bytes))
 
         # Convert to RGB if necessary
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
+        if image.mode != "RGB":
+            image = image.convert("RGB")
 
         # Perform OCR
         text = pytesseract.image_to_string(image)
@@ -120,12 +121,12 @@ def is_math_question(text: str) -> bool:
 
     # Check for math indicators
     math_patterns = [
-        r'\d+',  # Numbers
-        r'[+\-*/=<>]',  # Operators
-        r'\b(solve|find|calculate|compute|evaluate|simplify|prove)\b',  # Math verbs
-        r'\b(equation|function|derivative|integral|limit|sum|product)\b',  # Math terms
-        r'[xyz][\s]*=',  # Variables
-        r'\^|\*\*',  # Exponents
+        r"\d+",  # Numbers
+        r"[+\-*/=<>]",  # Operators
+        r"\b(solve|find|calculate|compute|evaluate|simplify|prove)\b",  # Math verbs
+        r"\b(equation|function|derivative|integral|limit|sum|product)\b",  # Math terms
+        r"[xyz][\s]*=",  # Variables
+        r"\^|\*\*",  # Exponents
     ]
 
     for pattern in math_patterns:
@@ -138,10 +139,10 @@ def is_math_question(text: str) -> bool:
 def sanitize_text(text: str) -> str:
     """Remove UI artifacts and clean text"""
     # Remove excessive whitespace
-    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r"\s+", " ", text)
 
     # Remove common UI artifacts
-    text = re.sub(r'[▪•◦▫]', '', text)
+    text = re.sub(r"[▪•◦▫]", "", text)
 
     return text.strip()
 
@@ -156,29 +157,33 @@ async def query_groq(question: str) -> str:
         "reply exactly: 'Please upload a question to solve'. "
         "If the input is a math question, produce ONLY the final answer(s) with NO WORKINGS. "
         "Format the answer exactly as described: start with '# ' at the very beginning, "
-        "then either '# Answer = <value>' or '# Answers:' followed by newline-separated "
-        "'a = <value>' lines for multiple values. Do not include any additional text, "
+        "then either '# Answer = ' or '# Answers:' followed by newline-separated "
+        "'a = ' lines for multiple values. Do not include any additional text, "
         "context, or reasoning."
     )
 
-    user_prompt = f"{question}\n\nReturn only the final answer(s) in the required format; do not output steps."
+    user_prompt = (
+        f"{question}\n\nReturn only the final answer(s) in the required format; "
+        "do not output steps."
+    )
 
     payload = {
         "model": GROQ_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
+            {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.3,
-        "max_tokens": 500
+        "max_tokens": 500,
     }
 
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     max_retries = 3
+
     for attempt in range(max_retries):
         try:
             async with aiohttp.ClientSession() as session:
@@ -186,32 +191,39 @@ async def query_groq(question: str) -> str:
                     GROQ_API_URL,
                     json=payload,
                     headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=60)
+                    timeout=aiohttp.ClientTimeout(total=60),
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        answer = data['choices'][0]['message']['content'].strip()
+                        answer = data["choices"][0]["message"]["content"].strip()
                         return answer
                     else:
                         error_text = await response.text()
-                        logger.error(f"Groq API error (attempt {attempt + 1}): {response.status} - {error_text}")
+                        logger.error(
+                            f"Groq API error (attempt {attempt + 1}): "
+                            f"{response.status} - {error_text}"
+                        )
 
                         if attempt < max_retries - 1:
-                            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                            await asyncio.sleep(2**attempt)  # Exponential backoff
                         else:
-                            raise Exception(f"Groq API failed after {max_retries} attempts")
+                            raise Exception(
+                                f"Groq API failed after {max_retries} attempts"
+                            )
 
         except asyncio.TimeoutError:
             logger.error(f"Groq API timeout (attempt {attempt + 1})")
+
             if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2**attempt)
             else:
                 raise Exception("Groq API timeout")
 
         except Exception as e:
             logger.error(f"Groq API exception (attempt {attempt + 1}): {e}")
+
             if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2attempt)
             else:
                 raise
 
@@ -219,31 +231,31 @@ async def query_groq(question: str) -> str:
 @bot.event
 async def on_ready():
     """Bot startup event"""
-    logger.info(f'Bot logged in as {bot.user}')
+    logger.info(f"Bot logged in as {bot.user}")
+
     try:
         synced = await bot.tree.sync()
-        logger.info(f'Synced {len(synced)} command(s)')
+        logger.info(f"Synced {len(synced)} command(s)")
     except Exception as e:
-        logger.error(f'Failed to sync commands: {e}')
+        logger.error(f"Failed to sync commands: {e}")
 
 
 @bot.tree.command(name="solve", description="Solve a math question from text or image")
 @app_commands.describe(
     question="The math question to solve (optional if image provided)",
-    image="Image containing the math question (optional if question provided)"
+    image="Image containing the math question (optional if question provided)",
 )
 async def solve(
     interaction: discord.Interaction,
     question: str = None,
-    image: discord.Attachment = None
+    image: discord.Attachment = None,
 ):
     """Main /solve command handler"""
-
     # Check if command is in allowed channel
     if interaction.channel_id != ALLOWED_CHANNEL_ID:
         await interaction.response.send_message(
             "Please use #question-ai for automated question solving",
-            ephemeral=True
+            ephemeral=True,
         )
         return
 
@@ -253,8 +265,9 @@ async def solve(
 
     if not allowed:
         await interaction.response.send_message(
-            "You have reached your rate limit of 10 requests per hour. Please try again later.",
-            ephemeral=True
+            "You have reached your rate limit of 10 requests per hour. "
+            "Please try again later.",
+            ephemeral=True,
         )
         return
 
@@ -268,10 +281,12 @@ async def solve(
         if image:
             # Validate image format
             file_ext = Path(image.filename).suffix.lower()
+
             if file_ext not in SUPPORTED_FORMATS:
                 await interaction.followup.send(
-                    f"Unsupported image format. Please use: {', '.join(SUPPORTED_FORMATS)}",
-                    ephemeral=True
+                    f"Unsupported image format. Please use: "
+                    f"{', '.join(SUPPORTED_FORMATS)}",
+                    ephemeral=True,
                 )
                 return
 
@@ -284,12 +299,11 @@ async def solve(
                 extracted_text = sanitize_text(extracted_text)
 
                 logger.info(f"Extracted text: {extracted_text[:100]}...")
-
             except Exception as e:
                 logger.error(f"Image processing error: {e}")
                 await interaction.followup.send(
                     "Failed to process the image. Please try again with a clearer image.",
-                    ephemeral=True
+                    ephemeral=True,
                 )
                 return
 
@@ -297,6 +311,7 @@ async def solve(
         combined_text = ""
         if question:
             combined_text = question
+
         if extracted_text:
             combined_text = f"{combined_text}\n{extracted_text}".strip()
 
@@ -304,7 +319,7 @@ async def solve(
         if not combined_text:
             await interaction.followup.send(
                 "Please upload a question to solve",
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
@@ -312,7 +327,7 @@ async def solve(
         if not is_math_question(combined_text):
             await interaction.followup.send(
                 "Please upload a question to solve",
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
@@ -324,22 +339,61 @@ async def solve(
         if answer == "Please upload a question to solve":
             await interaction.followup.send(
                 "Please upload a question to solve",
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
-        # Create and send public embed with answer
+        # --------- NEW / MODIFIED PART: public embed includes user + prompt ---------
+
+        # Truncate combined_text to avoid overly large embeds
+        prompt_preview = combined_text
+        max_prompt_len = 512
+        if len(prompt_preview) > max_prompt_len:
+            prompt_preview = prompt_preview[: max_prompt_len - 3] + "..."
+
         embed = discord.Embed(
             description=answer,
-            color=discord.Color.blue()
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow(),
         )
-        embed.set_author(name="FSparx AI")
 
-        # Send public message in channel
+        # Show the user who triggered it
+        embed.set_author(
+            name=f"FSparx AI • Requested by {interaction.user}",
+            icon_url=getattr(interaction.user.display_avatar, "url", discord.Embed.Empty),
+        )
+
+        # Add the prompt (text and/or OCR result)
+        embed.add_field(
+            name="Prompt",
+            value=prompt_preview or "*No text extracted*",
+            inline=False,
+        )
+
+        # Optional: note if there was an image
+        if image:
+            embed.add_field(
+                name="Source",
+                value="Text + Image" if question else "Image only",
+                inline=True,
+            )
+        else:
+            embed.add_field(
+                name="Source",
+                value="Text only",
+                inline=True,
+            )
+
+        # Send public message in channel so everyone can see it
         await interaction.channel.send(embed=embed)
 
+        # ---------------------------------------------------------------------------
+
         # Update ephemeral message
-        rate_limit_msg = "" if is_mod else f"\n\nYou have {remaining} requests remaining this hour."
+        rate_limit_msg = (
+            "" if is_mod else f"\n\nYou have {remaining} requests remaining this hour."
+        )
+
         await interaction.edit_original_response(
             content=f"✅ Answer posted!{rate_limit_msg}"
         )
@@ -348,28 +402,8 @@ async def solve(
 
     except Exception as e:
         logger.error(f"Unexpected error in solve command: {e}", exc_info=True)
+
         try:
             await interaction.followup.send(
                 "An error occurred while processing your request.",
-                ephemeral=True
-            )
-        except:
-            pass
-
-
-def main():
-    """Main entry point"""
-    if not GROQ_API_KEY or GROQ_API_KEY == "PASTE_GROQ_KEY_HERE":
-        logger.error("GROQ_API_KEY not set in secrets.py")
-        return
-
-    if not DISCORD_TOKEN or DISCORD_TOKEN == "PASTE_DISCORD_TOKEN_HERE":
-        logger.error("DISCORD_TOKEN not set in secrets.py")
-        return
-
-    logger.info("Starting bot...")
-    bot.run(DISCORD_TOKEN)
-
-
-if __name__ == "__main__":
-    main()
+                ephemeral=True,
