@@ -37,4 +37,5 @@ Queries Groq AI to solve math problems
 Posts answers as Discord embeds
 
 # Troubleshooting 
-
+"Tesseract not found": Run nix-env -iA nixpkgs.tesseract again
+"Module not found": Run pip install -r requirements.txt
