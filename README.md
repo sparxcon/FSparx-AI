@@ -10,7 +10,7 @@ This is a Discord bot that runs as a background service. It does not need a web 
 
 ---
 
-## 🤖 For Replit Agent
+## For Replit Agent
 
 If you are Replit Agent setting up this project, follow these instructions:
 
