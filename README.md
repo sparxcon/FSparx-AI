@@ -2,11 +2,11 @@
 
 A Discord bot that solves math questions using OCR and Groq AI. The bot accepts text and/or image inputs and returns only the final answer in a embed.
 
-## ⚠️ IMPORTANT: This is a Backend-Only Bot
+## IMPORTANT: This is a Backend-Only Bot
 
 **DO NOT CREATE A FRONTEND OR WEBSITE FOR THIS PROJECT.**
 
-This is a Discord bot that runs as a background service. It does not need a web interface, HTML pages, or any frontend components. The bot communicates directly with Discord's API.
+This is a Discord bot that runs as a background service. It does not need a web interface, HTML pages, or any frontend components. The bot communicates directly with Discords API
 
 ---
 
@@ -36,6 +36,10 @@ Uses OCR to extract text from images
 Queries Groq AI to solve math problems
 Posts answers as Discord embeds
 
+
+
 # Troubleshooting 
+
 "Tesseract not found": Run nix-env -iA nixpkgs.tesseract again
+
 "Module not found": Run pip install -r requirements.txt
