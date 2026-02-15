@@ -1,6 +1,6 @@
 # FSparx AI Discord Bot
 
-A production-ready Discord bot that solves math questions using OCR and Groq AI. The bot accepts text and/or image inputs, extracts questions, and returns only the final answer in a clean, formatted embed.
+A Discord bot that solves math questions using OCR and Groq AI. The bot accepts text and/or image inputs and returns only the final answer in a embed.
 
 ## ⚠️ IMPORTANT: This is a Backend-Only Bot
 
