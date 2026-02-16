@@ -12,6 +12,9 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import re
 
+# Fix Tesseract path for Railway/Nixpacks
+pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'
+
 # Import secrets
 try:
     from secrets import GROQ_API_KEY, DISCORD_TOKEN
