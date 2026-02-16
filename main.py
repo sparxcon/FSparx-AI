@@ -23,13 +23,21 @@ except ImportError:
 ALLOWED_CHANNEL_ID = 1472309916864876596
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.3-70b-versatile"
-
 RATE_LIMIT_REQUESTS = 10
 RATE_LIMIT_WINDOW = 3600  # 1 hour in seconds
 MOD_ROLE_NAME = "MOD"
 
 # Supported image formats
 SUPPORTED_FORMATS = {".png", ".jpg", ".jpeg", ".webp"}
+
+# Hardcoded Groq limits (from Groq docs Rate Limits table; Free plan; org-level, may vary by account tier)
+GROQ_LIMITS_FREE = {
+    "model": "llama-3.3-70b-versatile",
+    "rpm": 30,
+    "rpd": 1000,
+    "tpm": 12000,
+    "tpd": 100000,
+}
 
 # Setup logging
 logging.basicConfig(
@@ -64,7 +72,6 @@ def check_rate_limit(user_id: int, has_mod_role: bool) -> tuple[bool, int]:
     ]
 
     current_count = len(user_requests[user_id])
-
     if current_count >= RATE_LIMIT_REQUESTS:
         return False, 0
 
@@ -106,6 +113,7 @@ def extract_text_from_image(image_bytes: bytes) -> str:
         # Perform OCR
         text = pytesseract.image_to_string(image)
         return text.strip()
+
     except Exception as e:
         logger.error(f"OCR error: {e}")
         raise
@@ -114,7 +122,7 @@ def extract_text_from_image(image_bytes: bytes) -> str:
 def is_math_question(text: str) -> bool:
     """
     Basic heuristic to detect if text contains math-like content.
-    Looks for numbers, operators, equations, etc.
+    (Kept the same logic – Sparx questions are still math-y.)
     """
     if not text or len(text.strip()) < 3:
         return False
@@ -122,7 +130,7 @@ def is_math_question(text: str) -> bool:
     # Check for math indicators
     math_patterns = [
         r"\d+",  # Numbers
-        r"[+\-*/=<>]",  # Operators
+        r"[+\-\*/=<>]",  # Operators
         r"\b(solve|find|calculate|compute|evaluate|simplify|prove)\b",  # Math verbs
         r"\b(equation|function|derivative|integral|limit|sum|product)\b",  # Math terms
         r"[xyz][\s]*=",  # Variables
@@ -152,13 +160,16 @@ async def query_groq(question: str) -> str:
     Query Groq API asynchronously with retry logic.
     Returns the model's response text.
     """
+    # Rebranded system prompt: Sparx questions, not generic math
     system_prompt = (
-        "You are a math tutor. If the input is not a math question or is empty/irrelevant, "
-        "reply exactly: 'Please upload a question to solve'. "
-        "If the input is a math question, produce ONLY the final answer(s) with NO WORKINGS. "
+        "You are a Sparx question solver. The user will send questions copied from "
+        "Sparx Maths or screenshots of Sparx questions.\n\n"
+        "If the input is not a valid Sparx-style maths question or is empty/irrelevant, "
+        "reply exactly: 'Please upload a question to solve'.\n\n"
+        "If the input is a Sparx question, produce ONLY the final answer(s) with NO WORKINGS. "
         "Format the answer exactly as described: start with '# ' at the very beginning, "
         "then either '# Answer = ' or '# Answers:' followed by newline-separated "
-        "'a = ' lines for multiple values. Do not include any additional text, "
+        \"'a = ' lines for multiple values. Do not include any additional text, "
         "context, or reasoning."
     )
 
@@ -188,7 +199,7 @@ async def query_groq(question: str) -> str:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    GROQ_API_URL,
+                    GROQ_API_API_URL,
                     json=payload,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=60),
@@ -205,7 +216,7 @@ async def query_groq(question: str) -> str:
                         )
 
                         if attempt < max_retries - 1:
-                            await asyncio.sleep(2**attempt)  # Exponential backoff
+                            await asyncio.sleep(2 ** attempt)  # Exponential backoff
                         else:
                             raise Exception(
                                 f"Groq API failed after {max_retries} attempts"
@@ -215,7 +226,7 @@ async def query_groq(question: str) -> str:
             logger.error(f"Groq API timeout (attempt {attempt + 1})")
 
             if attempt < max_retries - 1:
-                await asyncio.sleep(2**attempt)
+                await asyncio.sleep(2 ** attempt)
             else:
                 raise Exception("Groq API timeout")
 
@@ -223,7 +234,7 @@ async def query_groq(question: str) -> str:
             logger.error(f"Groq API exception (attempt {attempt + 1}): {e}")
 
             if attempt < max_retries - 1:
-                await asyncio.sleep(2attempt)
+                await asyncio.sleep(2 ** attempt)
             else:
                 raise
 
@@ -240,21 +251,25 @@ async def on_ready():
         logger.error(f"Failed to sync commands: {e}")
 
 
-@bot.tree.command(name="solve", description="Solve a math question from text or image")
+@bot.tree.command(
+    name="solve",
+    description="Solve a Sparx question from text or image",
+)
 @app_commands.describe(
-    question="The math question to solve (optional if image provided)",
-    image="Image containing the math question (optional if question provided)",
+    question="The Sparx question to solve (optional if image provided)",
+    image="Image containing the Sparx question (optional if question provided)",
 )
 async def solve(
     interaction: discord.Interaction,
-    question: str = None,
-    image: discord.Attachment = None,
+    question: str | None = None,
+    image: discord.Attachment | None = None,
 ):
     """Main /solve command handler"""
+
     # Check if command is in allowed channel
     if interaction.channel_id != ALLOWED_CHANNEL_ID:
         await interaction.response.send_message(
-            "Please use #question-ai for automated question solving",
+            "Please use #question-ai for automated Sparx question solving",
             ephemeral=True,
         )
         return
@@ -299,6 +314,7 @@ async def solve(
                 extracted_text = sanitize_text(extracted_text)
 
                 logger.info(f"Extracted text: {extracted_text[:100]}...")
+
             except Exception as e:
                 logger.error(f"Image processing error: {e}")
                 await interaction.followup.send(
@@ -323,7 +339,7 @@ async def solve(
             )
             return
 
-        # Check if it's a math question
+        # Check if it's a Sparx-style math question (same heuristic)
         if not is_math_question(combined_text):
             await interaction.followup.send(
                 "Please upload a question to solve",
@@ -343,8 +359,7 @@ async def solve(
             )
             return
 
-        # --------- NEW / MODIFIED PART: public embed includes user + prompt ---------
-
+        # --------- Public embed includes user + prompt ---------
         # Truncate combined_text to avoid overly large embeds
         prompt_preview = combined_text
         max_prompt_len = 512
@@ -360,7 +375,9 @@ async def solve(
         # Show the user who triggered it
         embed.set_author(
             name=f"FSparx AI • Requested by {interaction.user}",
-            icon_url=getattr(interaction.user.display_avatar, "url", discord.Embed.Empty),
+            icon_url=getattr(
+                interaction.user.display_avatar, "url", discord.Embed.Empty
+            ),
         )
 
         # Add the prompt (text and/or OCR result)
@@ -370,7 +387,7 @@ async def solve(
             inline=False,
         )
 
-        # Optional: note if there was an image
+        # Note if there was an image
         if image:
             embed.add_field(
                 name="Source",
@@ -386,8 +403,7 @@ async def solve(
 
         # Send public message in channel so everyone can see it
         await interaction.channel.send(embed=embed)
-
-        # ---------------------------------------------------------------------------
+        # -------------------------------------------------------
 
         # Update ephemeral message
         rate_limit_msg = (
@@ -402,8 +418,57 @@ async def solve(
 
     except Exception as e:
         logger.error(f"Unexpected error in solve command: {e}", exc_info=True)
-
         try:
             await interaction.followup.send(
                 "An error occurred while processing your request.",
                 ephemeral=True,
+            )
+        except Exception:
+            pass
+
+
+@bot.tree.command(name="info", description="How to use FSparx AI + rate limits")
+async def info(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="FSparx AI • Info",
+        description=(
+            "FSparx AI is a **Sparx solver**.\n"
+            "Paste Sparx questions or upload Sparx screenshots, and the bot "
+            "returns only the **final answer** in a public embed.\n\n"
+            "Bot made and hosted by **@uh.izaak**."
+        ),
+        color=discord.Color.blue(),
+        timestamp=datetime.utcnow(),
+    )
+
+    embed.add_field(
+        name="How to use",
+        value=(
+            f"Use `/solve` in <#{ALLOWED_CHANNEL_ID}>.\n"
+            "• Text: `/solve question: <paste your Sparx question>`\n"
+            "• Image: `/solve image: <upload Sparx screenshot>`\n"
+            "• Both: provide text + image in the same command\n\n"
+            "The bot posts the answer **publicly** in the channel."
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Rate limits",
+        value=(
+            f"• Per-person: **{RATE_LIMIT_REQUESTS} requests per hour** "
+            f"(Role `{MOD_ROLE_NAME}`: unlimited)\n"
+            f"• Groq (Free plan) for `{GROQ_LIMITS_FREE['model']}`: "
+            f"**{GROQ_LIMITS_FREE['rpm']} RPM**, **{GROQ_LIMITS_FREE['rpd']} RPD**, "
+            f"**{GROQ_LIMITS_FREE['tpm']} TPM**, **{GROQ_LIMITS_FREE['tpd']} TPD**\n\n"
+            "Groq limits are **org-level** and may vary by account tier."
+        ),
+        inline=False,
+    )
+
+    # Public (visible to everyone)
+    await interaction.response.send_message(embed=embed, ephemeral=False)
+
+
+if __name__ == "__main__":
+    bot.run(DISCORD_TOKEN)
