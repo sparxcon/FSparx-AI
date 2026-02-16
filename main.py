@@ -23,6 +23,7 @@ except ImportError:
 ALLOWED_CHANNEL_ID = 1472309916864876596
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.3-70b-versatile"
+
 RATE_LIMIT_REQUESTS = 10
 RATE_LIMIT_WINDOW = 3600  # 1 hour in seconds
 MOD_ROLE_NAME = "MOD"
@@ -70,8 +71,8 @@ def check_rate_limit(user_id: int, has_mod_role: bool) -> tuple[bool, int]:
     user_requests[user_id] = [
         req_time for req_time in user_requests[user_id] if req_time > cutoff
     ]
-
     current_count = len(user_requests[user_id])
+
     if current_count >= RATE_LIMIT_REQUESTS:
         return False, 0
 
@@ -105,15 +106,12 @@ def extract_text_from_image(image_bytes: bytes) -> str:
     """Extract text from image using OCR"""
     try:
         image = Image.open(io.BytesIO(image_bytes))
-
         # Convert to RGB if necessary
         if image.mode != "RGB":
             image = image.convert("RGB")
-
         # Perform OCR
         text = pytesseract.image_to_string(image)
         return text.strip()
-
     except Exception as e:
         logger.error(f"OCR error: {e}")
         raise
@@ -130,11 +128,11 @@ def is_math_question(text: str) -> bool:
     # Check for math indicators
     math_patterns = [
         r"\d+",  # Numbers
-        r"[+\-\*/=<>]",  # Operators
+        r"[+\-\\*/=<>]",  # Operators
         r"\b(solve|find|calculate|compute|evaluate|simplify|prove)\b",  # Math verbs
         r"\b(equation|function|derivative|integral|limit|sum|product)\b",  # Math terms
-        r"[xyz][\s]*=",  # Variables
-        r"\^|\*\*",  # Exponents
+        r"[xyz][\s]\*=",  # Variables
+        r"\^|\\*\\*",  # Exponents
     ]
 
     for pattern in math_patterns:
@@ -148,10 +146,8 @@ def sanitize_text(text: str) -> str:
     """Remove UI artifacts and clean text"""
     # Remove excessive whitespace
     text = re.sub(r"\s+", " ", text)
-
     # Remove common UI artifacts
     text = re.sub(r"[▪•◦▫]", "", text)
-
     return text.strip()
 
 
@@ -160,7 +156,6 @@ async def query_groq(question: str) -> str:
     Query Groq API asynchronously with retry logic.
     Returns the model's response text.
     """
-    # Rebranded system prompt: Sparx questions, not generic math
     system_prompt = (
         "You are a Sparx question solver. The user will send questions copied from "
         "Sparx Maths or screenshots of Sparx questions.\n\n"
@@ -169,7 +164,7 @@ async def query_groq(question: str) -> str:
         "If the input is a Sparx question, produce ONLY the final answer(s) with NO WORKINGS. "
         "Format the answer exactly as described: start with '# ' at the very beginning, "
         "then either '# Answer = ' or '# Answers:' followed by newline-separated "
-        \"'a = ' lines for multiple values. Do not include any additional text, "
+        "'a = ' lines for multiple values. Do not include any additional text, "
         "context, or reasoning."
     )
 
@@ -199,7 +194,7 @@ async def query_groq(question: str) -> str:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    GROQ_API_API_URL,
+                    GROQ_API_URL,
                     json=payload,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=60),
@@ -215,26 +210,21 @@ async def query_groq(question: str) -> str:
                             f"{response.status} - {error_text}"
                         )
 
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(2 ** attempt)  # Exponential backoff
-                        else:
-                            raise Exception(
-                                f"Groq API failed after {max_retries} attempts"
-                            )
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2**attempt)  # Exponential backoff
+            else:
+                raise Exception(f"Groq API failed after {max_retries} attempts")
 
         except asyncio.TimeoutError:
             logger.error(f"Groq API timeout (attempt {attempt + 1})")
-
             if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2**attempt)
             else:
                 raise Exception("Groq API timeout")
-
         except Exception as e:
             logger.error(f"Groq API exception (attempt {attempt + 1}): {e}")
-
             if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2**attempt)
             else:
                 raise
 
@@ -243,7 +233,6 @@ async def query_groq(question: str) -> str:
 async def on_ready():
     """Bot startup event"""
     logger.info(f"Bot logged in as {bot.user}")
-
     try:
         synced = await bot.tree.sync()
         logger.info(f"Synced {len(synced)} command(s)")
@@ -265,7 +254,6 @@ async def solve(
     image: discord.Attachment | None = None,
 ):
     """Main /solve command handler"""
-
     # Check if command is in allowed channel
     if interaction.channel_id != ALLOWED_CHANNEL_ID:
         await interaction.response.send_message(
@@ -277,7 +265,6 @@ async def solve(
     # Check rate limit
     is_mod = has_mod_role(interaction)
     allowed, remaining = check_rate_limit(interaction.user.id, is_mod)
-
     if not allowed:
         await interaction.response.send_message(
             "You have reached your rate limit of 10 requests per hour. "
@@ -296,7 +283,6 @@ async def solve(
         if image:
             # Validate image format
             file_ext = Path(image.filename).suffix.lower()
-
             if file_ext not in SUPPORTED_FORMATS:
                 await interaction.followup.send(
                     f"Unsupported image format. Please use: "
@@ -308,13 +294,10 @@ async def solve(
             try:
                 logger.info(f"Downloading image: {image.filename}")
                 image_bytes = await download_image(image.url)
-
                 logger.info("Extracting text from image...")
                 extracted_text = extract_text_from_image(image_bytes)
                 extracted_text = sanitize_text(extracted_text)
-
                 logger.info(f"Extracted text: {extracted_text[:100]}...")
-
             except Exception as e:
                 logger.error(f"Image processing error: {e}")
                 await interaction.followup.send(
@@ -327,7 +310,6 @@ async def solve(
         combined_text = ""
         if question:
             combined_text = question
-
         if extracted_text:
             combined_text = f"{combined_text}\n{extracted_text}".strip()
 
@@ -339,7 +321,7 @@ async def solve(
             )
             return
 
-        # Check if it's a Sparx-style math question (same heuristic)
+        # Check if it's a Sparx-style math question
         if not is_math_question(combined_text):
             await interaction.followup.send(
                 "Please upload a question to solve",
@@ -409,13 +391,10 @@ async def solve(
         rate_limit_msg = (
             "" if is_mod else f"\n\nYou have {remaining} requests remaining this hour."
         )
-
         await interaction.edit_original_response(
             content=f"✅ Answer posted!{rate_limit_msg}"
         )
-
         logger.info(f"Successfully processed request from {interaction.user}")
-
     except Exception as e:
         logger.error(f"Unexpected error in solve command: {e}", exc_info=True)
         try:
@@ -445,8 +424,8 @@ async def info(interaction: discord.Interaction):
         name="How to use",
         value=(
             f"Use `/solve` in <#{ALLOWED_CHANNEL_ID}>.\n"
-            "• Text: `/solve question: <paste your Sparx question>`\n"
-            "• Image: `/solve image: <upload Sparx screenshot>`\n"
+            "• Text: `/solve question: `\n"
+            "• Image: `/solve image: `\n"
             "• Both: provide text + image in the same command\n\n"
             "The bot posts the answer **publicly** in the channel."
         ),
