@@ -359,11 +359,9 @@ async def solve(
 
         # Show the user who triggered it
         embed.set_author(
-            name=f"FSparx AI • Requested by {interaction.user}",
-            icon_url=getattr(
-                interaction.user.display_avatar, "url", discord.Embed.Empty
-            ),
-        )
+    name=f"FSparx AI • Requested by {interaction.user}",
+    icon_url=interaction.user.display_avatar.url if interaction.user.display_avatar else None,
+)
 
         # Add the prompt (text and/or OCR result)
         embed.add_field(
