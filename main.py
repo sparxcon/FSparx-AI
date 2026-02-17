@@ -3,17 +3,11 @@ from discord import app_commands
 from discord.ext import commands
 import aiohttp
 import asyncio
-import io
 import logging
-from PIL import Image
-import pytesseract
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 import re
-
-# Fix Tesseract path for Railway/Nixpacks
-pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'
 
 # Import config
 try:
@@ -21,10 +15,15 @@ try:
 except ImportError:
     print("ERROR: config.py not found. Please create it with your API keys.")
     exit(1)
+
 # Configuration
 ALLOWED_CHANNEL_ID = 1472309916864876596
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+
+# Use a vision model when an image is provided
+GROQ_VISION_MODEL = "llama-3.2-90b-vision-preview"
+# Use a text-only model for text queries
+GROQ_TEXT_MODEL = "llama-3.3-70b-versatile"
 
 RATE_LIMIT_REQUESTS = 10
 RATE_LIMIT_WINDOW = 3600  # 1 hour in seconds
@@ -35,7 +34,7 @@ SUPPORTED_FORMATS = {".png", ".jpg", ".jpeg", ".webp"}
 
 # Hardcoded Groq limits (from Groq docs Rate Limits table; Free plan; org-level, may vary by account tier)
 GROQ_LIMITS_FREE = {
-    "model": "llama-3.3-70b-versatile",
+    "model": GROQ_TEXT_MODEL,
     "rpm": 30,
     "rpd": 1000,
     "tpm": 12000,
@@ -94,31 +93,6 @@ def has_mod_role(interaction: discord.Interaction) -> bool:
     return False
 
 
-async def download_image(url: str) -> bytes:
-    """Download image from URL asynchronously"""
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as response:
-            if response.status == 200:
-                return await response.read()
-            else:
-                raise Exception(f"Failed to download image: HTTP {response.status}")
-
-
-def extract_text_from_image(image_bytes: bytes) -> str:
-    """Extract text from image using OCR"""
-    try:
-        image = Image.open(io.BytesIO(image_bytes))
-        # Convert to RGB if necessary
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-        # Perform OCR
-        text = pytesseract.image_to_string(image)
-        return text.strip()
-    except Exception as e:
-        logger.error(f"OCR error: {e}")
-        raise
-
-
 def is_math_question(text: str) -> bool:
     """
     Basic heuristic to detect if text contains math-like content.
@@ -153,7 +127,7 @@ def sanitize_text(text: str) -> str:
     return text.strip()
 
 
-async def query_groq(question: str) -> str:
+async def query_groq(question: str | None, image_url: str | None) -> str:
     """
     Query Groq API asynchronously with retry logic.
     Returns the model's response text.
@@ -170,17 +144,34 @@ async def query_groq(question: str) -> str:
         "context, or reasoning."
     )
 
-    user_prompt = (
-        f"{question}\n\nReturn only the final answer(s) in the required format; "
-        "do not output steps."
-    )
+    if image_url:
+        model = GROQ_VISION_MODEL
+        content_parts = []
+        if question and question.strip():
+            content_parts.append({"type": "text", "text": question})
+        else:
+            content_parts.append({"type": "text", "text": "Solve the math problem in the image."})
+        content_parts.append({"type": "image_url", "image_url": {"url": image_url}})
 
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": content_parts},
+        ]
+    else:
+        model = GROQ_TEXT_MODEL
+        user_prompt = (
+            f"{question}\n\nReturn only the final answer(s) in the required format; "
+            "do not output steps."
+        )
+
+        messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
-        ],
+        ]
+
+    payload = {
+        "model": model,
+        "messages": messages,
         "temperature": 0.3,
         "max_tokens": 500,
     }
@@ -279,11 +270,8 @@ async def solve(
     await interaction.response.send_message("Working...", ephemeral=True)
 
     try:
-        extracted_text = ""
-
-        # Process image if provided
+        # Validate image format if provided
         if image:
-            # Validate image format
             file_ext = Path(image.filename).suffix.lower()
             if file_ext not in SUPPORTED_FORMATS:
                 await interaction.followup.send(
@@ -293,47 +281,28 @@ async def solve(
                 )
                 return
 
-            try:
-                logger.info(f"Downloading image: {image.filename}")
-                image_bytes = await download_image(image.url)
-                logger.info("Extracting text from image...")
-                extracted_text = extract_text_from_image(image_bytes)
-                extracted_text = sanitize_text(extracted_text)
-                logger.info(f"Extracted text: {extracted_text[:100]}...")
-            except Exception as e:
-                logger.error(f"Image processing error: {e}")
-                await interaction.followup.send(
-                    "Failed to process the image. Please try again with a clearer image.",
-                    ephemeral=True,
-                )
-                return
+        # Clean text prompt
+        clean_question = sanitize_text(question) if question else None
 
-        # Combine question and extracted text
-        combined_text = ""
-        if question:
-            combined_text = question
-        if extracted_text:
-            combined_text = f"{combined_text}\n{extracted_text}".strip()
-
-        # Check if we have any content
-        if not combined_text:
+        # If no text and no image, stop
+        if not clean_question and not image:
             await interaction.followup.send(
                 "Please upload a question to solve",
                 ephemeral=True,
             )
             return
 
-        # Check if it's a Sparx-style math question
-        if not is_math_question(combined_text):
+        # If text-only, enforce math check
+        if clean_question and not image and not is_math_question(clean_question):
             await interaction.followup.send(
                 "Please upload a question to solve",
                 ephemeral=True,
             )
             return
 
-        # Query Groq API
+        # Query Groq API (image sent directly when provided)
         logger.info("Querying Groq API...")
-        answer = await query_groq(combined_text)
+        answer = await query_groq(clean_question, image.url if image else None)
 
         # Check if Groq rejected the input
         if answer == "Please upload a question to solve":
@@ -344,8 +313,8 @@ async def solve(
             return
 
         # --------- Public embed includes user + prompt ---------
-        # Truncate combined_text to avoid overly large embeds
-        prompt_preview = combined_text
+        # Truncate prompt to avoid overly large embeds
+        prompt_preview = clean_question or "*Image only*"
         max_prompt_len = 512
         if len(prompt_preview) > max_prompt_len:
             prompt_preview = prompt_preview[: max_prompt_len - 3] + "..."
@@ -353,19 +322,19 @@ async def solve(
         embed = discord.Embed(
             description=answer,
             color=discord.Color.blue(),
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
 
         # Show the user who triggered it
         embed.set_author(
-    name=f"FSparx AI • Requested by {interaction.user}",
-    icon_url=interaction.user.display_avatar.url if interaction.user.display_avatar else None,
-)
+            name=f"FSparx AI • Requested by {interaction.user}",
+            icon_url=interaction.user.display_avatar.url if interaction.user.display_avatar else None,
+        )
 
-        # Add the prompt (text and/or OCR result)
+        # Add the prompt (text and/or image)
         embed.add_field(
             name="Prompt",
-            value=prompt_preview or "*No text extracted*",
+            value=prompt_preview,
             inline=False,
         )
 
@@ -373,7 +342,7 @@ async def solve(
         if image:
             embed.add_field(
                 name="Source",
-                value="Text + Image" if question else "Image only",
+                value="Text + Image" if clean_question else "Image only",
                 inline=True,
             )
         else:
@@ -417,7 +386,7 @@ async def info(interaction: discord.Interaction):
             "Bot made and hosted by **@uh.izaak**."
         ),
         color=discord.Color.blue(),
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
     )
 
     embed.add_field(
