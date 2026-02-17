@@ -15,13 +15,12 @@ import re
 # Fix Tesseract path for Railway/Nixpacks
 pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'
 
-# Import secrets
+# Import config
 try:
-    from secrets import GROQ_API_KEY, DISCORD_TOKEN
+    from config import GROQ_API_KEY, DISCORD_TOKEN
 except ImportError:
-    print("ERROR: secrets.py not found. Please create it with your API keys.")
+    print("ERROR: config.py not found. Please create it with your API keys.")
     exit(1)
-
 # Configuration
 ALLOWED_CHANNEL_ID = 1472309916864876596
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
