@@ -21,7 +21,7 @@ ALLOWED_CHANNEL_ID = 1472309916864876596
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # Use a vision model when an image is provided
-GROQ_VISION_MODEL = "llama-3.2-11b-vision-preview"
+GROQ_VISION_MODEL = "llava-v1.5-7b-4096"
 # Use a text-only model for text queries
 GROQ_TEXT_MODEL = "llama-3.3-70b-versatile"
 
